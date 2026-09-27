@@ -22,3 +22,5 @@ logs/
 autoortho/aopipeline/libaopipeline.dylib
 ao_*.txt
 xp_*.txt
+.venv/
+CLAUDE.local.md
