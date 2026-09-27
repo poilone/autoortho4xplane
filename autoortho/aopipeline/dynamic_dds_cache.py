@@ -193,6 +193,10 @@ class DynamicDDSCache:
         self._entries: OrderedDict = OrderedDict()
         self._lock = threading.Lock()
 
+        # tile_key -> number of writes recorded by this process. Lets a tile
+        # that found no entry skip re-probing the disk until one is written.
+        self._write_generations = {}
+
         # In-flight healing guard (prevents duplicate patch work)
         self._healing_in_progress: set = set()
 
@@ -268,6 +272,7 @@ class DynamicDDSCache:
             self._entries[key] = (dds_path, ddm_path, size, time.time())
             self._entries.move_to_end(key)
             self._current_size += size
+            self._write_generations[key] = self._write_generations.get(key, 0) + 1
             if count_store:
                 self._stores += 1
             over_limit = (
@@ -373,6 +378,15 @@ class DynamicDDSCache:
     def _tile_key(self, tile_id: str, max_zoom: int) -> str:
         """Unique key for LRU tracking."""
         return f"{tile_id}_z{max_zoom}"
+
+    def write_generation(self, tile_id: str, max_zoom: int) -> int:
+        """Count of writes this process recorded for the entry.
+
+        A tile that missed the cache compares this value before probing the
+        disk again; it only changes when something is stored for the entry.
+        """
+        # A single dict read is atomic under the GIL: no lock on this hot path.
+        return self._write_generations.get(self._tile_key(tile_id, max_zoom), 0)
 
     def _paths_for(self, row: int, col: int, maptype: str,
                    tilename_zoom: int, max_zoom: int) -> Tuple[str, str]:

@@ -9710,7 +9710,10 @@ class Tile(object):
         # When True, the "bytes_read" warning is not applicable because X-Plane
         # may only need small mipmaps even though we populated everything
         self._prepopulated = False
-        
+        # (max_zoom, cache write generation) of the last persistent-cache
+        # probe that found nothing; skips re-probing the disk on every read.
+        self._dds_cache_miss = None
+
         # Track when this tile was first requested for accurate tile creation time stats
         self.first_request_time = None
         # Track if tile completion has been reported (to avoid double-counting)
@@ -11952,6 +11955,24 @@ class Tile(object):
         bump("partial_mm0_promotion_deferred_to_live_rows")
         return False
 
+    def _dds_cache_probe_key(self):
+        """Return the key of a persistent-cache probe, or None to skip it.
+
+        X-Plane reads a tile in many small requests. Once a probe found no
+        entry, probing again is pointless until this process records a write
+        for the tile, which changes the cache's write generation.
+        """
+        if dynamic_dds_cache is None or self._prepopulated:
+            return None
+        probe = (
+            self.max_zoom,
+            dynamic_dds_cache.write_generation(self.id, self.max_zoom),
+        )
+        if probe == self._dds_cache_miss:
+            bump("dynamic_dds_cache_known_miss")
+            return None
+        return probe
+
     def get_bytes(self, offset, length, time_budget=None):
         """
         Get bytes from DDS at specified offset.
@@ -11986,8 +12007,10 @@ class Tile(object):
         # ═══════════════════════════════════════════════════════════════════
         # The persistent cache survives across sessions. On a warm start this
         # provides ~1-2ms per tile vs ~390ms for a full rebuild.
-        if dynamic_dds_cache is not None and not self._prepopulated:
+        cache_probe = self._dds_cache_probe_key()
+        if cache_probe is not None:
             cache_has_requested_mipmap = True
+            meta = None
             try:
                 meta = dynamic_dds_cache.load_metadata(self.id, self.max_zoom, self)
                 populated = meta.get("populated_mipmaps") if meta else None
@@ -12015,6 +12038,8 @@ class Tile(object):
                 dynamic_dds_cache.load(self.id, self.max_zoom, self)
                 if cache_has_requested_mipmap else None
             )
+            if meta is None and cached_bytes is None:
+                self._dds_cache_miss = cache_probe
             if cached_bytes is not None:
                 if self._populate_dds_from_prebuilt(
                     cached_bytes,
