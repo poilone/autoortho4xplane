@@ -6,20 +6,25 @@ import signal
 import subprocess
 import sys
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, List, Optional
 
 try:
     from autoortho.utils.mount_utils import _is_frozen
+    from autoortho.worker_modes import SESSION_ENV
 except ImportError:
     from utils.mount_utils import _is_frozen
+    from worker_modes import SESSION_ENV
 
 log = logging.getLogger(__name__)
 
 
 DEFAULT_WORKER_STOP_TIMEOUT = 8.0
 _REPO_ROOT = Path(__file__).resolve().parent.parent
+# Lets sibling workers of this run share startup work (e.g. the disk scan).
+_SESSION_ID = uuid.uuid4().hex
 
 
 @dataclass
@@ -59,6 +64,7 @@ class AOProcessSupervisor:
     ) -> WorkerHandle:
         env = os.environ.copy()
         env["AO_RUN_MODE"] = "mount_worker"
+        env.setdefault(SESSION_ENV, _SESSION_ID)
 
         if stats_addr:
             env["AO_STATS_ADDR"] = stats_addr
