@@ -214,6 +214,22 @@ Controls how many CPU threads the native pipeline uses for parallel operations (
 
 **Recommendation:** Leave at 0 unless you need to limit CPU usage for other applications.
 
+### CPUs Reserved for X-Plane in Flight (`in_flight_reserved_threads`)
+- **Type:** `auto` or integer
+- **Default:** `auto`
+- **Config file:** `in_flight_reserved_threads = auto`
+
+While a flight is running, texture builds leave this many logical CPUs free so
+X-Plane's main and render threads never wait behind a burst of build threads.
+During the loading screen X-Plane waits on these textures, so builds still use
+every core. Ignored when `native_pipeline_threads` is set.
+
+| Value | Behavior |
+|-------|----------|
+| **auto** | A quarter of the logical CPUs, at least 2 (4 on a 16-thread CPU) |
+| **0** | No reservation (previous behavior) |
+| **N** | Keep N logical CPUs free |
+
 ### Persistent Predictive DDS Cache (`persistent_dds_cache_mb`)
 - **Type:** Integer (megabytes)
 - **Default:** 0 (managed by the shared disk budget)

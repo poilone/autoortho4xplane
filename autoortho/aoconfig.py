@@ -298,6 +298,10 @@ dds_budget_pct = 80
 # 0 = auto (dynamically divides CPU cores across concurrent builds)
 # >0 = fixed thread count per build (e.g., 4 means each build uses 4 threads)
 native_pipeline_threads = 0
+# Logical CPUs kept free for X-Plane while a flight is running (ignored when
+# native_pipeline_threads is set). During the loading screen every core is used.
+# auto = a quarter of the CPUs (at least 2), 0 = no reservation
+in_flight_reserved_threads = auto
 # Pipeline mode for DDS texture building
 # auto: Automatically select best mode for your platform (recommended)
 #       With buffer pool optimization, hybrid is fastest on all platforms

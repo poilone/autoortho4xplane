@@ -1623,10 +1623,29 @@ def _prefetch_allowed_for(obj, *, consume_token=False):
         return is_prefetch_runtime_allowed()
 
 
+def _in_flight_reserved_threads() -> int:
+    """Logical CPUs left free for X-Plane while a flight is running.
+
+    ``in_flight_reserved_threads``: "auto" (a quarter of the CPUs, at least
+    2), or an explicit count; 0 disables the reservation.
+    """
+    value = getattr(CFG.autoortho, "in_flight_reserved_threads", "auto")
+    try:
+        reserved = int(value)
+    except (ValueError, TypeError):
+        reserved = -1
+    if reserved < 0:
+        reserved = max(2, CURRENT_CPU_COUNT // 4)
+    return max(0, min(reserved, CURRENT_CPU_COUNT - 2))
+
+
 def _thread_budget_for(active: int) -> int:
     """Per-build OpenMP thread count given the number of active builds (including self).
 
     Divides CPU cores across active concurrent builds so total threads ~ cpu_count.
+    Once the flight runs, a few cores stay free so X-Plane's main and render
+    threads never queue behind a burst of build threads; during the loading
+    screen X-Plane waits on these textures, so builds use every core.
     Returns at least 2 to ensure each build makes progress.
     If native_pipeline_threads config is > 0, uses that as a fixed override.
     """
@@ -1637,7 +1656,10 @@ def _thread_budget_for(active: int) -> int:
     except (ValueError, TypeError, AttributeError):
         pass
 
-    return max(2, CURRENT_CPU_COUNT // max(1, active))
+    usable = CURRENT_CPU_COUNT
+    if datareftracker.connected:
+        usable -= _in_flight_reserved_threads()
+    return max(2, usable // max(1, active))
 
 
 class _BackgroundBuildDeferred(Exception):
