@@ -1441,12 +1441,47 @@ def _sync_shared_flight_state() -> bool:
         return _shared_flight_state_allowed
 
 
+_shared_simbrief_lock = threading.Lock()
+_shared_simbrief_last_poll = 0.0
+_shared_simbrief_generation = None
+_SHARED_SIMBRIEF_POLL_SEC = 2.0
+
+
+def _sync_shared_simbrief_route() -> None:
+    """Load the SimBrief route the parent published into this worker.
+
+    Dynamic zoom reads the route too, so this must not depend on the
+    prefetcher running.
+    """
+    global _shared_simbrief_last_poll, _shared_simbrief_generation
+
+    if getattr(datareftracker, "running", False):
+        # The parent owns the route and loads it directly.
+        return
+    now = time.monotonic()
+    with _shared_simbrief_lock:
+        if now - _shared_simbrief_last_poll < _SHARED_SIMBRIEF_POLL_SEC:
+            return
+        _shared_simbrief_last_poll = now
+        generation = get_stat("simbrief_route_generation")
+        if not generation or generation == _shared_simbrief_generation:
+            return
+        _shared_simbrief_generation = generation
+        snapshot = get_stat("simbrief_route_snapshot")
+    if snapshot:
+        if not simbrief_flight_manager.load_flight_data(snapshot):
+            log.warning("Worker rejected shared SimBrief route snapshot")
+    else:
+        simbrief_flight_manager.clear()
+
+
 class FlightRuntimeGate:
     """One condition and one watcher for all speculative flight-start waits."""
 
-    def __init__(self, state_reader, poll_interval=0.5):
+    def __init__(self, state_reader, poll_interval=0.5, on_poll=None):
         self._state_reader = state_reader
         self._poll_interval = max(0.1, float(poll_interval))
+        self._on_poll = on_poll
         self._condition = threading.Condition()
         self._allowed = False
         self._generation = 0
@@ -1457,6 +1492,14 @@ class FlightRuntimeGate:
     def generation(self):
         with self._condition:
             return self._generation
+
+    def start(self):
+        """Start mirroring flight state now rather than on first query.
+
+        Mount workers call this at startup: dynamic zoom, night exclusion and
+        suspend_maxwait read the mirrored state even with prefetch disabled.
+        """
+        self._ensure_started()
 
     def _ensure_started(self):
         allowed = bool(self._state_reader())
@@ -1477,6 +1520,11 @@ class FlightRuntimeGate:
     def _watch(self):
         while not self._stop.is_set() and not is_shutdown_requested():
             self.notify_state_change()
+            if self._on_poll is not None:
+                try:
+                    self._on_poll()
+                except Exception:
+                    log.debug("Flight runtime poll hook failed", exc_info=True)
             self._stop.wait(self._poll_interval)
         with self._condition:
             self._condition.notify_all()
@@ -1512,7 +1560,10 @@ class FlightRuntimeGate:
             self._condition.notify_all()
 
 
-flight_runtime_gate = FlightRuntimeGate(_sync_shared_flight_state)
+flight_runtime_gate = FlightRuntimeGate(
+    _sync_shared_flight_state,
+    on_poll=_sync_shared_simbrief_route,
+)
 
 
 def is_flight_runtime_allowed() -> bool:
@@ -4980,8 +5031,7 @@ class SpatialPrefetcher:
         self._last_velocity_evidence = None
         self._last_velocity_signature = None
         self._last_simbrief_signature = None
-        self._shared_simbrief_generation = None
-        
+
         # Track recently prefetched to avoid duplicates
         # Use an LRU-like structure with max size
         self._recently_prefetched = set()
@@ -5115,16 +5165,7 @@ class SpatialPrefetcher:
         self._do_velocity_prefetch_cycle(lat, lon)
 
     def _sync_shared_simbrief(self):
-        generation = get_stat("simbrief_route_generation")
-        if not generation or generation == self._shared_simbrief_generation:
-            return
-        self._shared_simbrief_generation = generation
-        snapshot = get_stat("simbrief_route_snapshot")
-        if snapshot:
-            if not simbrief_flight_manager.load_flight_data(snapshot):
-                log.warning("Worker rejected shared SimBrief route snapshot")
-        else:
-            simbrief_flight_manager.clear()
+        _sync_shared_simbrief_route()
     
     def _should_use_simbrief_prefetch(self, lat: float, lon: float) -> bool:
         """

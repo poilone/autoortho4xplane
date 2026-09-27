@@ -839,6 +839,13 @@ class AutoOrtho(Operations):
             from datareftrack import dt as datareftracker
         time_exclusion_manager.set_dataref_tracker(datareftracker)
 
+        # Mount workers have no UDP listener of their own. Mirror the parent's
+        # flight state from startup: dynamic zoom and night exclusion need it
+        # even when prefetching is disabled.
+        runtime_gate = getattr(getortho, "flight_runtime_gate", None)
+        if runtime_gate is not None:
+            runtime_gate.start()
+
     def _ensure_runtime_services(self):
         if self._runtime_services_started:
             return
