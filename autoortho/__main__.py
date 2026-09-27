@@ -323,7 +323,52 @@ try:
 except ImportError:
     import autoortho
 
+try:
+    from autoortho.utils.process_lock import ProcessLock
+except ImportError:
+    from utils.process_lock import ProcessLock
+
+_INSTANCE_LOCK_PATH = os.path.join(
+    os.path.expanduser("~"), ".autoortho-data", "autoortho.lock"
+)
+_ALREADY_RUNNING_MSG = (
+    "AutoOrtho is already running.\n\n"
+    "Only one AutoOrtho can stream scenery at a time. Close the other "
+    "AutoOrtho window (check the taskbar), or end autoortho in the Task "
+    "Manager, then start AutoOrtho again."
+)
+
+
+def _show_error_dialog(title, msg):
+    """Best-effort native error dialog; the app may have no console."""
+    try:
+        if os.name == "nt":
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(None, msg, title, 0x00000010)
+        elif system_type == "darwin":
+            # Use osascript to show a native macOS dialog
+            import subprocess
+            apple_script = f'''
+                display dialog "{msg.replace('"', '\\"').replace(chr(10), '\\n')}" ¬
+                with title "{title}" ¬
+                buttons {{"OK"}} ¬
+                default button "OK" ¬
+                with icon stop
+            '''
+            subprocess.run(['osascript', '-e', apple_script], capture_output=True)
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
+    # A second instance would mount the same scenery again and write the same
+    # log file. The OS releases this lock when the process exits or crashes.
+    _instance_lock = ProcessLock(_INSTANCE_LOCK_PATH)
+    if not _instance_lock.acquire(blocking=False):
+        print(_ALREADY_RUNNING_MSG, file=sys.stderr)
+        _show_error_dialog("AutoOrtho", _ALREADY_RUNNING_MSG)
+        # Nothing was started: skip the atexit shutdown hook.
+        os._exit(1)
     try:
         setuplogs()
         autoortho.main()
@@ -337,20 +382,4 @@ if __name__ == "__main__":
             + "\n\nSee log for details:\n"
             + log_path
         )
-        try:
-            if os.name == "nt":
-                import ctypes
-                ctypes.windll.user32.MessageBoxW(None, msg, "AutoOrtho Error", 0x00000010)
-            elif system_type == "darwin":
-                # Use osascript to show a native macOS dialog
-                import subprocess
-                apple_script = f'''
-                    display dialog "{msg.replace('"', '\\"').replace(chr(10), '\\n')}" ¬
-                    with title "AutoOrtho Error" ¬
-                    buttons {{"OK"}} ¬
-                    default button "OK" ¬
-                    with icon stop
-                '''
-                subprocess.run(['osascript', '-e', apple_script], capture_output=True)
-        except Exception:
-            pass
+        _show_error_dialog("AutoOrtho Error", msg)
