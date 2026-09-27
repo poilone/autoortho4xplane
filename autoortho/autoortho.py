@@ -1240,7 +1240,8 @@ def main():
 
     from datareftrack import dt
     dt.start()
-    
+    flighttrack.set_dataref_tracker(dt)
+
     # Run things
     if args.root and args.mountpoint:
         # Just mount specific requested dirs

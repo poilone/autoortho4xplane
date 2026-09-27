@@ -13,12 +13,6 @@ import queue
 import heapq
 import itertools
 
-# Handle imports for both frozen (PyInstaller) and direct Python execution
-try:
-    from autoortho import flighttrack
-except ImportError:
-    import flighttrack
-
 from collections import defaultdict, OrderedDict
 from functools import wraps, lru_cache
 
@@ -823,8 +817,6 @@ class AutoOrtho(Operations):
         self._negative_getattr_cache = OrderedDict()  # LRU cache for avoiding getattr probes for files that don't exist
         self._negative_getattr_cache_max = 16384  # Max entries before LRU eviction
         self._negative_getattr_cache_lock = threading.Lock()
-        self._ft_started = False
-        self._ft_start_lock = threading.Lock()
 
         # Track redirected DSF file handles: fh -> redirect_path
         # Used when time exclusion redirects DSF reads to global scenery
@@ -905,21 +897,6 @@ class AutoOrtho(Operations):
                     log.debug(f"FUSE: no config overrides")
         except Exception as e:
             log.warning(f"FUSE: failed to apply fuse_config tuning: {e}")
-
-    def _ensure_flighttrack_started(self, reason_path=None):
-        """Start flight tracking exactly once, when first DDS is touched."""
-        if self._ft_started:
-            return
-        log.info(f"First DDS access at {reason_path}. Starting flight tracker.")
-        try:
-            flighttrack.ft.start()
-        except Exception as e:
-            # Keep the FS alive even if flighttrack fails; just log loudly.
-            log.error(f"Failed to start flight tracker: {e}")
-            # Do NOT mark _ft_started; we'll retry once on next DDS trigger.
-            return
-
-        self._ft_started = True
 
     def _full_path(self, partial):
         if partial.startswith("/"):
@@ -1179,7 +1156,6 @@ class AutoOrtho(Operations):
 
     def _getattr_dds(self, path, match, now):
         """Get attributes for virtual DDS files."""
-        self._ensure_flighttrack_started(reason_path=path)
         row, col, maptype, zoom = match.groups()
         maptype = self._resolve_dds_maptype(maptype)
         dds_size = self._get_dds_size_cached(int(row), int(col), maptype, int(zoom))

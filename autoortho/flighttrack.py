@@ -223,6 +223,24 @@ class FlightTracker(object):
 
 ft = FlightTracker()
 
+# Dataref tracker started by the parent process. The map reads it rather than
+# ``ft``: mount workers no longer run their own legacy UDP listener.
+_dataref_tracker = None
+
+
+def set_dataref_tracker(tracker):
+    global _dataref_tracker
+    _dataref_tracker = tracker
+
+
+def _aircraft_position():
+    """Return (lat, lon), or (-1, -1) while no flight data is available."""
+    tracker = _dataref_tracker
+    data = tracker.get_flight_data() if tracker is not None else None
+    if data:
+        return data["lat"], data["lon"]
+    return ft.lat, ft.lon
+
 @socketio.on('connect')
 def connect():
     log.info(f'client connected {request.sid}')
@@ -235,9 +253,7 @@ def disconnect():
 def handle_latlon():
     log.info("Handle lat lon.")
     while True:
-        lat = ft.lat
-        lon = ft.lon
-        #lat, lon, alt, hdg, spd = ft.get_info()
+        lat, lon = _aircraft_position()
         log.debug(f"emit: {lat} X {lon}")
         socketio.emit('latlon', {"lat":lat,"lon":lon})
         socketio.sleep(2)
@@ -251,9 +267,7 @@ def handle_metrics():
 
 @app.route('/get_latlon')
 def get_latlon():
-    lat = ft.lat
-    lon = ft.lon
-    #lat, lon, alt, hdg, spd = ft.get_info()
+    lat, lon = _aircraft_position()
     log.debug(f"{lat} X {lon}")
     return jsonify({"lat":lat,"lon":lon})
 
