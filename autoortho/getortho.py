@@ -275,6 +275,29 @@ def _batch_read_cache_files(paths: list) -> dict:
     return _batch_read_cache_files_python(paths)
 
 
+def _wait_for_chunk_data(pending, required, deadline) -> int:
+    """Block on chunk ``ready`` events until ``required`` of ``pending`` hold data.
+
+    Returns as soon as the requirement is met, or can no longer be met because
+    downloads resolved empty (404, invalid JPEG, retries exhausted), or
+    ``deadline`` (a ``time.monotonic()`` value) passes. Never polls.
+
+    Returns the number of pending chunks that hold data.
+    """
+    succeeded = 0
+    unresolved = len(pending)
+    for chunk in pending:
+        if succeeded >= required or succeeded + unresolved < required:
+            break
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not chunk.ready.wait(remaining):
+            break
+        unresolved -= 1
+        if chunk.data:
+            succeeded += 1
+    return succeeded
+
+
 def _batch_read_cache_files_python(paths: list) -> dict:
     """
     Python fallback for batch cache file reading.
@@ -14254,17 +14277,12 @@ class Tile(object):
                         self.get_maxwait(),
                     )
                     if wait_time > 0:
-                        wait_deadline = time.monotonic() + wait_time
-                        
-                        while time.monotonic() < wait_deadline:
-                            # Count ready chunks (including newly completed ones)
-                            current_ready = sum(1 for i in range(total_chunks) 
-                                               if jpeg_datas[i] is not None or 
-                                               (chunks[i].ready.is_set() and chunks[i].data))
-                            if current_ready >= total_chunks * min_ratio:
-                                break
-                            time.sleep(0.01)
-                        
+                        _wait_for_chunk_data(
+                            [chunks[i] for i in missing_chunks_indices],
+                            math.ceil(total_chunks * min_ratio) - ready_count,
+                            time.monotonic() + wait_time,
+                        )
+
                         # Collect newly downloaded chunks
                         for i in missing_chunks_indices:
                             chunk = chunks[i]
