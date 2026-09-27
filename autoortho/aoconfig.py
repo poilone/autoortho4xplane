@@ -110,7 +110,8 @@ hide = True
 # Console/UI log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 console_log_level = INFO
 # File log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-file_log_level = DEBUG
+# DEBUG writes every read and slows scenery loading; use it only to diagnose.
+file_log_level = INFO
 
 [paths]
 # X-Plane install path

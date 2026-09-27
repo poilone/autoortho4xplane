@@ -236,7 +236,7 @@ def setuplogs():
         os.makedirs(log_dir)
 
     # Get log levels from config
-    file_log_level_str = getattr(CFG.general, 'file_log_level', 'DEBUG').upper()
+    file_log_level_str = getattr(CFG.general, 'file_log_level', 'INFO').upper()
     console_log_level_str = getattr(CFG.general, 'console_log_level', 'INFO').upper()
     
     # Override with AO_DEBUG environment variable if set (for development)

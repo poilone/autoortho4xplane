@@ -278,7 +278,7 @@ def main():
     parser.add_argument(
         "--loglevel",
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-        default="DEBUG",
+        default="INFO",
     )
     args, unknown = parser.parse_known_args()
 

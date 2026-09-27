@@ -1369,7 +1369,7 @@ class ConfigUI(QMainWindow):
             },
             "Logging & Reports": {
                 "console_log_level_combo": "INFO",
-                "file_log_level_combo": "DEBUG",
+                "file_log_level_combo": "INFO",
                 "performance_profiling_check": True,
                 "performance_sample_interval_spin": 1.0,
                 "performance_checkpoint_interval_spin": 10.0,
@@ -3076,7 +3076,7 @@ class ConfigUI(QMainWindow):
             for message in (
                 "=== AutoOrtho Logs ===",
                 f"UI Log Level: {console_level_str}",
-                f"File Log Level: {getattr(self.cfg.general, 'file_log_level', 'DEBUG').upper()}",
+                f"File Log Level: {getattr(self.cfg.general, 'file_log_level', 'INFO').upper()}",
                 f"Log file location: {self.cfg.paths.log_file}",
                 "",
             ):
@@ -3134,7 +3134,7 @@ class ConfigUI(QMainWindow):
     def update_file_log_level(self):
         """Update the file log handler level when config changes"""
         try:
-            file_level_str = getattr(self.cfg.general, 'file_log_level', 'DEBUG').upper()
+            file_level_str = getattr(self.cfg.general, 'file_log_level', 'INFO').upper()
             file_level = getattr(logging, file_level_str, logging.DEBUG)
             
             # Find and update the file handler
@@ -5034,7 +5034,7 @@ class ConfigUI(QMainWindow):
         self.file_log_level_combo.installEventFilter(self)
         self.file_log_level_combo.setFocusPolicy(Qt.StrongFocus) # Prevent focus by hovering mouse wheel
         self.file_log_level_combo.addItems(['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'])
-        file_level = getattr(self.cfg.general, 'file_log_level', 'DEBUG').upper()
+        file_level = getattr(self.cfg.general, 'file_log_level', 'INFO').upper()
         self.file_log_level_combo.setCurrentText(file_level)
         self.file_log_level_combo.setObjectName('file_log_level')
         self.file_log_level_combo.setToolTip(
