@@ -33,7 +33,8 @@ Ce guide complète [CLAUDE.md](../../CLAUDE.md). Il fixe la façon d'écrire et 
 - **Pas d'attente active.** Remplacer `while cond: time.sleep(x)` par `threading.Event.wait(timeout)`, `Condition.wait_for` ou `concurrent.futures.wait`.
 - **Verrous courts.** Aucune E/S, aucun appel réseau, aucune construction d'objet coûteuse sous un verrou global (`tc_lock`, `_lock` du cache). Construire hors verrou, publier sous verrou (double vérification).
 - **Budget de threads global.** Threads Python × threads OpenMP par build ≤ cœurs logiques − réserve X-Plane (au moins 4 threads sur une machine 16 threads). Toujours passer `max_threads` explicite aux fonctions natives.
-- **Priorités.** Live (X-Plane attend) > préchargement > maintenance (scan disque, migration, healing). Le travail de fond vérifie régulièrement `is_live_building()` et s'interrompt.
+- **Priorités.** Live (X-Plane attend) > préchargement > maintenance (scan disque, migration, healing). Le travail de fond vérifie régulièrement `is_live_building()` et s'interrompt, ou attend `live_pressure_controller.wait_until_clear(stop, kind="network")` entre deux unités de travail. Ne pas baisser la priorité système d'un thread Python (`SetThreadPriority`, mode arrière-plan) : ralenti par le système alors qu'il détient le GIL, il bloquerait les autres threads du processus.
+- **Pendant le chargement d'X-Plane.** Rien de ce qui peut attendre (scans, migrations, inventaires) ne démarre à la première ouverture de DDS : attendre `flight_runtime_gate.wait_until_allowed(stop, timeout=...)`, puis un délai.
 - **Arrêt.** Toute boucle de fond teste un `Event` d'arrêt et se termine en moins d'une seconde.
 - **GIL.** Le travail CPU lourd va dans le code natif appelé via ctypes (qui relâche le GIL) ; éviter les boucles Python par pixel ou par bloc.
 
@@ -50,6 +51,7 @@ Ce guide complète [CLAUDE.md](../../CLAUDE.md). Il fixe la façon d'écrire et 
 ## 6. Mémoire
 
 - Ne pas allouer d'image RGBA pleine taille (8192² = 256 Mo) pour produire quelques lignes.
+- Ne pas reconstruire un gros `bytes` par concaténation à chaque ajout (`prev + data`) : écrire N morceaux recopie alors O(N²) octets. Garder les morceaux séparés, ou `bytearray` / `b"".join` une seule fois.
 - Libérer explicitement les buffers natifs (`AoImage.close()`, `DDS.close()`, `with` quand disponible).
 - Tout cache mémoire a une borne en octets et une politique d'éviction ; ne pas évincer ce qu'X-Plane vient d'ouvrir.
 - Préférer `memoryview` / buffers pré-alloués aux concaténations de `bytes` dans les lectures.
@@ -71,7 +73,10 @@ Ce guide complète [CLAUDE.md](../../CLAUDE.md). Il fixe la façon d'écrire et 
 ## 9. Tests
 
 - `pytest`, fichiers dans `autoortho/tests/test_<module>.py`. Pour limiter les conflits avec l'upstream, ajouter de nouveaux fichiers plutôt que modifier les siens.
+- Un test ne doit jamais toucher l'installation de l'utilisateur : importer `aoconfig` sauvegarde `~/.autoortho`. Lancer pytest avec `USERPROFILE`, `TEMP` et `TMP` redirigés vers un dossier temporaire.
+- Un état global de module ajouté (mémo, cache) doit avoir une clé qui ne fuit pas d'un test à l'autre (chemin sous `tmp_path` plutôt que coordonnées fixes), ou être remplacé par `monkeypatch` dans ses propres tests.
 - Importer comme les autres tests du dossier : `sys.path.insert(0, <dossier autoortho>)` puis `import getortho`, `from aopipeline.x import y`. La forme `from autoortho.x import y` casse dès qu'un autre test a placé le dossier `autoortho` en tête de `sys.path` (`autoortho` devient alors `autoortho.py`).
+- Un faux stats store lié par `aostats.bind_local_store` ne doit pas être un `dict` vide : `aostats` teste `if _store:` et écrirait ailleurs sans erreur.
 - Tester sans X-Plane ni réseau : simuler `datareftrack.dt`, les réponses HTTP et le système de fichiers (`tmp_path`). Extraire la décision à tester dans une petite fonction plutôt que de piloter tout `get_bytes`.
 - Comportement inter-processus (verrous, fichiers partagés) : au moins un test avec un vrai sous-processus (`subprocess.Popen([sys.executable, "-c", ...])`), un test dans un seul processus ne prouve rien sur le comportement réel.
 - Un `ProcessLock` n'est tenu que tant que l'objet vit : garder une référence (variable de module pour le verrou d'instance), sinon le ramasse-miettes ferme le fichier et relâche le verrou.
