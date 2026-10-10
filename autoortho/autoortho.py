@@ -935,6 +935,15 @@ class AOMount:
         self._download_broker_env = {}
         os.environ.pop("AO_HTTP2_BROKER_ADDR", None)
         os.environ.pop("AO_HTTP2_BROKER_TOKEN", None)
+        # This process's own client (diagnose() downloads test chunks) would
+        # keep queueing on the stopped broker after a restart: 60 s per request.
+        for name in ("getortho", "autoortho.getortho"):
+            reset = getattr(sys.modules.get(name), "_reset_http2_client", None)
+            if reset is not None:
+                try:
+                    reset()
+                except Exception as exc:
+                    log.error("Error closing HTTP/2 broker client: %s", exc)
         if broker is not None:
             try:
                 broker.stop()
