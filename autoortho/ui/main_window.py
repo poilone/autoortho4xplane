@@ -412,6 +412,18 @@ class ConfigUI(QMainWindow):
         except Exception:
             log.exception("Could not publish SimBrief route to mount workers")
 
+    def _publish_current_simbrief_route(self):
+        """Publish the loaded route again, e.g. into a new stats store."""
+        data = getattr(self, "simbrief_flight_data", None)
+        if not data:
+            return
+        enabled = getattr(
+            getattr(self.cfg, "simbrief", None), "use_flight_data", False
+        )
+        if isinstance(enabled, str):
+            enabled = enabled.lower() in ("true", "1", "yes", "on")
+        self._publish_simbrief_to_workers(data, enabled=bool(enabled))
+
     status_update = Signal(str)
     log_update = Signal(str)
     show_error = Signal(str)

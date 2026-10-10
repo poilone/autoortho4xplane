@@ -808,6 +808,11 @@ class AOMount:
     def _ensure_parent_services(self):
         if not getattr(self, "stats_manager", None):
             self.start_stats_manager()
+            # Stop Streaming discarded the previous store and what the UI had
+            # published into it once; workers read the SimBrief route there.
+            republish = getattr(self, "_publish_current_simbrief_route", None)
+            if republish is not None:
+                republish()
         if not getattr(self, "log_server", None):
             self.start_log_server()
         self.start_download_broker()
