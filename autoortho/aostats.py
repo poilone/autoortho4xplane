@@ -434,7 +434,7 @@ def filter_stats_snapshot(snap: dict) -> dict:
                 or k.startswith('partial_mm_time_total_ms:')
                 or k.startswith('lock:')
             )
-        ) or k in ('proc_count', 'cur_mem_mb_ts')
+        ) or k in ('proc_count', 'cur_mem_mb_ts', 'simbrief_route_snapshot')
 
     filtered = {}
     active_tile_counts = {}

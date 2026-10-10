@@ -767,6 +767,9 @@ class AOMount:
                                     'proc_count',
                                     'cur_mem_mb_ts',
                                     'flight_state',
+                                    # Whole route (fixes, ATIS, METAR): ~80 KB
+                                    # per line, rotating the log in minutes.
+                                    'simbrief_route_snapshot',
                                 )
                             )
                         filtered = {k: v for k, v in snap.items() if not _is_internal(k)}
