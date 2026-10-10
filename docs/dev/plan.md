@@ -6,7 +6,8 @@ Document de reprise : où en est le fork, ce qui a été mesuré, comment mesure
 
 - **Lot 1** : `origin/fix/3.0-batch1` (`f30a596`, 9 commits au-dessus de l'upstream 3.0 `514954b`). Exécutable construit comme la CI (version `3.0.0-fork-batch1-f30a596`, emplacement dans `CLAUDE.local.md`), testé en vol du 28 au 30/09. Aucune erreur, comportement conforme (un seul scan disque, sondes DDS évitées, état du vol transmis aux workers).
 - **Lot 2** : branche locale `fix/3.0-batch2`, tirée du lot 1, commitée le 10/10 (11 commits), **non poussée**. Romain a retenu M1 à M8 le 10/10, Précision de Romain pour M3 : redemander toutes les 30 s pendant 2 min, puis 15 min si ça échoue encore. Il a ajouté M15, et M14 (la carte n'a pas besoin d'être vue d'un autre appareil pour l'instant). M1 à M8, M14 et M15 sont codées, avec leurs tests (fichiers `autoortho/tests/test_*` nouveaux : `chunk_permanent_miss`, `sparse_mipmap_buffer`, `stop_start`, `stats_log_filter`, `load_time_log`, `deferred_cache_scan`, `dds_cache_scan_safety`, `webui_host`, `update_check_stage`, plus des ajouts dans `dds_cache_probe`).
-- En attente : exécutable et vols de mesure.
+- Branche poussée sur `origin` le 10/10. Exécutable construit comme la CI depuis `f773ecc` (version `3.0.0-fork-batch2-f773ecc`, emplacement dans `CLAUDE.local.md`) ; test sans réseau réussi (worker de montage, code 2).
+- En attente : les vols de mesure.
 - L'upstream n'a pas bougé depuis `514954b` (vérifié le 10/10) : `develop` = `release/3.0.0` = `514954b` ; la PR `release/3.0.0 → main` (ProgrammingDinosaur/autoortho4xplane#449) est ouverte depuis le 22/09, sans release 3.0.0 publiée (dernière release : 2.5.0 du 19/06). Aucune autre branche plus récente.
 
 ## Mesures de référence
@@ -92,5 +93,5 @@ Vérifié et écarté : `TerrainTileLookup` (2 à 14 s par région au premier mo
 
 1. ~~Romain choisit les mesures~~ (M1 à M8, le 10/10).
 2. ~~Implémenter~~ et commiter (10/10 : un commit par mesure sur `fix/3.0-batch2`, M1 à M8, M14, M15, puis la documentation ; chaque commit passe ses propres tests ; non poussé).
-3. Construire l'exécutable (procédure de `CLAUDE.md`), puis deux vols : à froid avec HWiNFO, puis à chaud, selon le protocole ci-dessus.
+3. ~~Construire l'exécutable~~ (10/10), puis deux vols : à froid avec HWiNFO, puis à chaud, selon le protocole ci-dessus. À vérifier dans le log du lot 2 : la ligne « Flight started … » (M7), « DDS cache scan » environ une minute après le début du vol et non pendant le chargement (M8), plus aucune route SimBrief dans les lignes `STATS` (M6), un seul INFO par type de carte pour les 404 (M3).
 4. Lot suivant selon les résultats : M9, M10, M11.
