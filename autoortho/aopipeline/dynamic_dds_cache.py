@@ -25,7 +25,7 @@ import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 try:
     from autoortho.dds_manifest import (
@@ -67,6 +67,10 @@ _ROW_RECORD_MAGIC = b"DDRR"
 _ROW_RECORD_SCHEMA = 1
 _ROW_RECORD_HEADER = struct.Struct(">4sBIQI32s")
 _MAX_ROW_RECORD_SIZE = 128 * 1024 * 1024
+
+# An entry being written has a .dds (or rows) without its .ddm for a moment,
+# in this process or another mount worker: scans delete only older files.
+_SCAN_MIN_DELETE_AGE_SEC = 10 * 60.0
 
 
 def cleanup_source_jpegs(cache_dir: str, col: int, row: int,
@@ -2249,13 +2253,28 @@ class DynamicDDSCache:
     # Startup scan
     # ------------------------------------------------------------------
 
-    def scan_existing(self) -> int:
+    @staticmethod
+    def _old_enough_to_delete(path: str, now: float) -> bool:
+        try:
+            return now - os.path.getmtime(path) >= _SCAN_MIN_DELETE_AGE_SEC
+        except OSError:
+            return False
+
+    def scan_existing(
+        self,
+        should_continue: Optional[Callable[[], bool]] = None,
+    ) -> int:
         """
         Scan the DDS cache directory and populate the LRU tracking dict.
-        
-        Called once at startup in a background thread. Discovers entries
-        written by previous sessions so they can be served immediately.
-        
+
+        Called once per session in a background thread. Discovers entries
+        written by previous sessions so that LRU eviction can see them;
+        ``load()`` reads entries from disk without needing the scan.
+
+        Args:
+            should_continue: Called before each directory; may block while
+                live reads are pending. Returning False stops the scan.
+
         Returns:
             Number of entries discovered
         """
@@ -2264,24 +2283,28 @@ class DynamicDDSCache:
             return 0
 
         count = 0
+        now = time.time()
         try:
             for dirpath, _dirnames, filenames in os.walk(self._dds_root):
+                if should_continue is not None and not should_continue():
+                    break
                 filename_set = set(filenames)
                 for fname in filenames:
                     if fname.endswith(".dds"):
                         ddm_name = fname[:-4] + ".ddm"
-                        if ddm_name not in filename_set:
-                            try:
-                                os.remove(os.path.join(dirpath, fname))
-                            except OSError:
-                                pass
                     elif fname.endswith(".ddm.rows"):
                         ddm_name = fname[:-5]
-                        if ddm_name not in filename_set:
-                            try:
-                                os.remove(os.path.join(dirpath, fname))
-                            except OSError:
-                                pass
+                    else:
+                        continue
+                    orphan_path = os.path.join(dirpath, fname)
+                    if (
+                        ddm_name not in filename_set
+                        and self._old_enough_to_delete(orphan_path, now)
+                    ):
+                        try:
+                            os.remove(orphan_path)
+                        except OSError:
+                            pass
 
                 for fname in filenames:
                     if not fname.endswith(".ddm"):
@@ -2292,7 +2315,8 @@ class DynamicDDSCache:
                     rows_path = self._row_records_path(ddm_path)
                     meta = self._read_ddm(ddm_path)
                     if meta is None:
-                        self._delete_pair(dds_path, ddm_path)
+                        if self._old_enough_to_delete(ddm_path, now):
+                            self._delete_pair(dds_path, ddm_path)
                         continue
 
                     has_dds = os.path.isfile(dds_path)
@@ -2309,7 +2333,8 @@ class DynamicDDSCache:
                         and bool(meta.get("partial_mipmaps"))
                     )
                     if not has_dds and not has_partial_rows:
-                        self._delete_pair(dds_path, ddm_path)
+                        if self._old_enough_to_delete(ddm_path, now):
+                            self._delete_pair(dds_path, ddm_path)
                         continue
 
                     # Reconstruct the tile key from metadata
@@ -2344,6 +2369,10 @@ class DynamicDDSCache:
                             count += 1
                         else:
                             self._current_size -= old[2]
+                            # Read or written in this session before the scan:
+                            # keep that access time, or LRU eviction would
+                            # treat the tiles of this flight as the oldest.
+                            atime = max(atime, old[3])
                         self._entries[key] = (
                             dds_path,
                             ddm_path,
@@ -2370,7 +2399,10 @@ class DynamicDDSCache:
 
         return count
 
-    def migrate_uncompressed(self) -> int:
+    def migrate_uncompressed(
+        self,
+        should_continue: Optional[Callable[[], bool]] = None,
+    ) -> int:
         """Re-compress existing uncompressed DDS files in-place.
 
         Walks the cache directory, reads each uncompressed DDS, compresses it
@@ -2378,6 +2410,7 @@ class DynamicDDSCache:
         Updates DDM metadata and LRU size tracking.
 
         Designed to run once in a background thread after ``scan_existing()``.
+        ``should_continue`` works as in ``scan_existing()``.
 
         Returns the number of files migrated.
         """
@@ -2390,6 +2423,8 @@ class DynamicDDSCache:
 
         try:
             for dirpath, _dirnames, filenames in os.walk(self._dds_root):
+                if should_continue is not None and not should_continue():
+                    break
                 for fname in filenames:
                     if not fname.endswith(".ddm"):
                         continue

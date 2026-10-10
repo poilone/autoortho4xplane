@@ -1557,8 +1557,9 @@ class FlightRuntimeGate:
         with self._condition:
             return self._allowed
 
-    def wait_until_allowed(self, stop_event):
+    def wait_until_allowed(self, stop_event, timeout=None):
         self._ensure_started()
+        deadline = None if timeout is None else time.monotonic() + timeout
         with self._condition:
             while (
                 not self._allowed
@@ -1566,7 +1567,13 @@ class FlightRuntimeGate:
                 and not self._stop.is_set()
                 and not is_shutdown_requested()
             ):
-                self._condition.wait()
+                if deadline is None:
+                    self._condition.wait()
+                    continue
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._condition.wait(remaining)
             return bool(self._allowed and not stop_event.is_set())
 
     def notify_state_change(self):
@@ -7942,6 +7949,31 @@ tile_completion_tracker: Optional[TileCompletionTracker] = None
 dynamic_dds_cache = None       # type: ignore[assignment]  # DynamicDDSCache instance
 disk_budget_manager = None     # type: ignore[assignment]  # DiskBudgetManager instance
 _cache_init_thread = None
+_cache_init_stop = threading.Event()
+
+# The startup cache scans read every .ddm of every region (~19 s per worker
+# for 3 000 entries) and nothing needs them during the flight load: entries
+# are read from disk directly, and nothing is evicted before the budget scan.
+# They wait for the flight to run, then give way to live reads.
+DISK_CACHE_SCAN_DELAY_SEC = 60.0
+DISK_CACHE_SCAN_MAX_WAIT_SEC = 20 * 60.0
+
+
+def _initialize_disk_caches(stop):
+    """Run the startup scans of the persistent caches once the flight runs."""
+    if flight_runtime_gate.wait_until_allowed(
+        stop, timeout=DISK_CACHE_SCAN_MAX_WAIT_SEC
+    ):
+        stop.wait(DISK_CACHE_SCAN_DELAY_SEC)
+
+    def should_continue():
+        return live_pressure_controller.wait_until_clear(stop, kind="network")
+
+    if not stop.is_set() and dynamic_dds_cache is not None:
+        dynamic_dds_cache.scan_existing(should_continue)
+        dynamic_dds_cache.migrate_uncompressed(should_continue)
+    if not stop.is_set() and disk_budget_manager is not None:
+        disk_budget_manager.initial_scan()
 _persist_partial_dds: bool = False
 
 
@@ -8389,15 +8421,10 @@ def start_predictive_dds(tile_cacher=None) -> None:
     else:
         log.info("Disk budget enforcement disabled by config")
 
-    def _initialize_disk_caches():
-        if dynamic_dds_cache is not None:
-            dynamic_dds_cache.scan_existing()
-            dynamic_dds_cache.migrate_uncompressed()
-        if disk_budget_manager is not None:
-            disk_budget_manager.initial_scan()
-
+    _cache_init_stop.clear()
     _cache_init_thread = threading.Thread(
         target=_initialize_disk_caches,
+        args=(_cache_init_stop,),
         daemon=True,
         name="dds-cache-init",
     )
@@ -8435,6 +8462,7 @@ def stop_predictive_dds() -> None:
         log.info(f"BackgroundDDSBuilder: {stats['builds_completed']} tiles built, "
                 f"{stats['builds_failed']} failed")
 
+    _cache_init_stop.set()
     if _cache_init_thread is not None and _cache_init_thread.is_alive():
         _cache_init_thread.join(timeout=10.0)
         if _cache_init_thread.is_alive():
