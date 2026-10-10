@@ -461,6 +461,9 @@ threading = True
 [flightdata]
 # Local port for map and stats (default 5847 to avoid macOS AirPlay on 5000)
 webui_port = 5847
+# Address the map and stats server listens on: 127.0.0.1 for this computer
+# only, 0.0.0.0 to reach it from other devices of the local network
+webui_host = 127.0.0.1
 # UDP port XPlane listens on
 xplane_udp_port = 49000
 

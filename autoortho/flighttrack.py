@@ -395,10 +395,20 @@ def shutdown_server():
 active_port = None
 
 
+def webui_host():
+    """Address the server listens on.
+
+    It runs in Werkzeug's development mode: keep it off the local network
+    unless the user asks for it.
+    """
+    return str(getattr(CFG.flightdata, "webui_host", "") or "127.0.0.1")
+
+
 def run():
     global active_port
     log.info("Start flighttracker...")
     preferred_port = int(CFG.flightdata.webui_port)
+    host = webui_host()
     # Try the configured port first, then a few fallbacks to avoid conflicts
     # (e.g. macOS AirPlay Receiver occupies port 5000 by default).
     ports_to_try = [preferred_port] + [p for p in (5847, 7847, 8847, 0) if p != preferred_port]
@@ -409,7 +419,7 @@ def run():
                 log.warning("All preferred ports busy, binding to OS-assigned port.")
             elif port != preferred_port:
                 log.warning(f"Port {preferred_port} unavailable, trying {port}.")
-            socketio.run(app, host='0.0.0.0', port=port, allow_unsafe_werkzeug=True)
+            socketio.run(app, host=host, port=port, allow_unsafe_werkzeug=True)
             break  # normal exit (server was stopped gracefully)
         except OSError as e:
             # Port already in use — try the next one
@@ -421,7 +431,7 @@ def run():
                 log.error(f"FlightTracker server error: {e}")
             break
     if active_port is not None:
-        log.info(f"FlightTracker was running on port {active_port}.")
+        log.info(f"FlightTracker was running on {host}:{active_port}.")
     else:
         log.error("FlightTracker failed to start on any port.")
     log.info("Exiting flighttracker ...") 
@@ -429,7 +439,7 @@ def run():
 def main():
     ft.start()
     try:
-        app.run(host='0.0.0.0', debug=False, threaded=True, use_reloader=False)
+        app.run(host=webui_host(), debug=False, threaded=True, use_reloader=False)
     except KeyboardInterrupt:
         print("Shutdown requested.")
     finally:
