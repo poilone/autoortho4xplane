@@ -8496,6 +8496,81 @@ MAX_BROKER_TIMEOUT_ATTEMPTS = 3
 # Maptypes whose URL embeds a rotating server number; used only for logging.
 MAPTYPES_WITH_SERVER = ("YNDX", "EOX", "GO2")
 
+# Answers meaning the provider has no image for the chunk. Asking again usually
+# gets the same answer, so the chunk is remembered as missing for a while.
+PROVIDER_MISSING_CODES = frozenset({404, 410})
+# A first answer may be a transient provider error: the chunk may be asked
+# again every 30 s for 2 min; still missing after that, it waits 15 min.
+PERMANENT_MISS_RETRY_SEC = 30.0
+PERMANENT_MISS_CONFIRM_SEC = 2 * 60.0
+PERMANENT_MISS_TTL = 15 * 60.0
+PERMANENT_MISS_MAX_ENTRIES = 65536
+
+
+class _PermanentMissMemo:
+    """Chunk cache paths the provider recently answered with "no image".
+
+    Reopened tiles, prefetch retries and DDS healing create new Chunk objects
+    for the same hole; without this memo each of them downloaded it again.
+    Answers are kept ``retry`` seconds while the hole is younger than
+    ``confirm`` seconds, then ``ttl`` seconds. A hole whose last entry expired
+    more than ``ttl`` seconds ago starts again.
+    """
+
+    def __init__(self, ttl=PERMANENT_MISS_TTL,
+                 retry=PERMANENT_MISS_RETRY_SEC,
+                 confirm=PERMANENT_MISS_CONFIRM_SEC,
+                 max_entries=PERMANENT_MISS_MAX_ENTRIES,
+                 clock=time.monotonic):
+        self._ttl = float(ttl)
+        self._retry = float(retry)
+        self._confirm = float(confirm)
+        self._max_entries = int(max_entries)
+        self._clock = clock
+        # key -> (reason, expires_at, first_seen); expired entries are kept
+        # ``ttl`` seconds longer to recognise a hole that persists.
+        self._entries = OrderedDict()
+        self._lock = threading.Lock()
+
+    def add(self, key: str, reason: str) -> None:
+        with self._lock:
+            now = self._clock()
+            previous = self._entries.get(key)
+            if previous is not None and now < previous[1]:
+                # Answer to a request sent before the entry existed.
+                return
+            first_seen = (
+                previous[2]
+                if previous is not None and now < previous[1] + self._ttl
+                else now
+            )
+            confirmed = now - first_seen >= self._confirm
+            ttl = self._ttl if confirmed else self._retry
+            self._entries[key] = (reason, now + ttl, first_seen)
+            self._entries.move_to_end(key)
+            while len(self._entries) > self._max_entries:
+                self._entries.popitem(last=False)
+
+    def get(self, key: str):
+        """Return the recorded reason, or None if unknown or expired."""
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                return None
+            now = self._clock()
+            if entry[1] <= now:
+                if entry[1] + self._ttl <= now:
+                    del self._entries[key]
+                return None
+            return entry[0]
+
+
+_permanent_misses = _PermanentMissMemo()
+
+# (maptype, status) pairs already reported at INFO; later ones go to DEBUG and
+# the STATS counters (one line per chunk flooded the log with 404s).
+_reported_permanent_statuses = set()
+
 
 class _NetworkRequest(object):
     """A single provider HTTP request prepared by :meth:`Chunk.begin_network_attempt`.
@@ -9134,6 +9209,16 @@ class Chunk(object):
             self._notify_ready()
             return _AttemptOutcome(resolved=True)
 
+        known_miss = _permanent_misses.get(self.cache_path)
+        if known_miss is not None:
+            self.permanent_failure = True
+            self.failure_reason = known_miss
+            self.data = b''
+            self.ready.set()
+            bump('chunk_known_permanent_miss')
+            self._notify_ready()
+            return _AttemptOutcome(resolved=True)
+
         _max_attempts = max_attempts or MAX_TOTAL_ATTEMPTS
 
         # === TOTAL ATTEMPT LIMIT ===
@@ -9240,6 +9325,11 @@ class Chunk(object):
                       f"size={len(data) if data else 0})")
             bump('chunk_invalid_jpeg')
             self.data = b''
+            # A 200 without an image is the provider's "no imagery here":
+            # the same request returns the same body, so do not retry it.
+            self.permanent_failure = True
+            self.failure_reason = "invalid_jpeg"
+            _permanent_misses.add(self.cache_path, self.failure_reason)
 
         bump('bytes_dl', len(self.data))
 
@@ -9279,28 +9369,44 @@ class Chunk(object):
         return _AttemptOutcome(resolved=True)
 
     def _handle_failed_status(self, request, response, status_code):
-        log.warning(
-            f"Failed with status {status_code} to get chunk {self}"
-            + (" on server " + request.server
-               if self.maptype.upper() in MAPTYPES_WITH_SERVER else "")
-            + "."
+        server_note = (
+            " on server " + request.server
+            if self.maptype.upper() in MAPTYPES_WITH_SERVER else ""
         )
         bump_many({f"http_{status_code}": 1, "req_err": 1})
 
         # Check if this is a permanent failure
         if status_code in PERMANENT_FAILURE_CODES:
-            log.info(f"Chunk {self} permanently failed with {status_code}, marking as failed")
+            reported = (self.maptype, status_code)
+            if reported in _reported_permanent_statuses:
+                log.debug("Chunk %s permanently failed with %s%s",
+                          self, status_code, server_note)
+            else:
+                _reported_permanent_statuses.add(reported)
+                log.info(
+                    "Chunk %s permanently failed with %s%s; further %s "
+                    "answers for %s are counted in STATS "
+                    "(chunk_permanent_fail_%s)",
+                    self, status_code, server_note, status_code,
+                    self.maptype, status_code,
+                )
             self.permanent_failure = True
             self.failure_reason = str(status_code)
             self.data = b''  # Empty data
             self.ready.set()  # Mark as ready (with no data) to unblock waiters
             bump(f'chunk_permanent_fail_{status_code}')
+            if status_code in PROVIDER_MISSING_CODES:
+                _permanent_misses.add(self.cache_path, self.failure_reason)
             # Notify tile completion tracker even on failure
             # This allows DDS prebuild to proceed with available chunks
             # (fallbacks will be applied during build for failed chunks)
             self._notify_ready()
             return _AttemptOutcome(resolved=True)  # Stop worker retries
 
+        log.warning(
+            f"Failed with status {status_code} to get chunk {self}"
+            f"{server_note}."
+        )
         requeue_delay = 0.0
 
         # Check if transient failure has exceeded max retries
