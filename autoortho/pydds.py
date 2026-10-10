@@ -410,16 +410,16 @@ class SparseMipmapBuffer(_CursorCompatibilityMixin, MipmapBuffer):
 
     @staticmethod
     def _merge_segments(segments):
-        merged = []
-        for start, data in sorted(segments, key=lambda item: item[0]):
-            if not data:
-                continue
-            if merged and merged[-1][0] + len(merged[-1][1]) == start:
-                prev_start, prev_data = merged[-1]
-                merged[-1] = (prev_start, prev_data + data)
-            else:
-                merged.append((start, data))
-        return tuple(merged)
+        # Adjacent segments stay separate: joining them copied the whole run
+        # on every write, so building a mipmap row by row cost O(rows^2)
+        # bytes (0.7 s per ZL18 tile). Readers and coverage() walk adjacent
+        # segments already.
+        return tuple(
+            sorted(
+                (item for item in segments if item[1]),
+                key=lambda item: item[0],
+            )
+        )
 
     def write_at(self, offset, data):
         data = bytes(data)
