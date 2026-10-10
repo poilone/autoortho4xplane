@@ -8938,19 +8938,24 @@ class ConfigUI(QMainWindow):
 
     def on_update_check_result(self, data):
         """Handle result from update check worker"""
-        self.task_manager.complete_task(
-            "update-check",
-            stage=("Update available" if data else "Up to date"),
-        )
+        latest_tag, html_url = data if data else (None, None)
+        latest_ver = self._parse_version(latest_tag)
+        current_ver = self._parse_version(__version__)
+        comparable = latest_ver is not None and current_ver is not None
+        # GitHub answering does not mean that its latest release is newer.
+        if comparable and latest_ver > current_ver:
+            stage = "Update available"
+        elif comparable:
+            stage = "Up to date"
+        else:
+            stage = "No update information"
+        self.task_manager.complete_task("update-check", stage=stage)
         try:
             if not data:
                 if self._update_check_manual:
                     self.update_status_bar("No update information available.")
                 return
-            latest_tag, html_url = data
-            latest_ver = self._parse_version(latest_tag)
-            current_ver = self._parse_version(__version__)
-            if latest_ver is None or current_ver is None:
+            if not comparable:
                 return
             if latest_ver > current_ver:
                 normalized = str(latest_ver)
