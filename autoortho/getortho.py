@@ -9733,7 +9733,7 @@ class Tile(object):
         # may only need small mipmaps even though we populated everything
         self._prepopulated = False
         # (max_zoom, cache write generation) of the last persistent-cache
-        # probe that found nothing; skips re-probing the disk on every read.
+        # probe that found nothing usable; skips re-probing on every read.
         self._dds_cache_miss = None
 
         # Track when this tile was first requested for accurate tile creation time stats
@@ -10282,6 +10282,8 @@ class Tile(object):
             int(row): data
             for row, data in rows.items()
             if 0 <= int(row) < total_rows
+            # Rows restored or persisted earlier are already installed.
+            and int(row) not in self._persisted_exact_rows
             and len(data) == bytes_per_chunk_row
             and int(row) in self._loaded_mm0_manifests
             and self._loaded_mm0_manifests[int(row)].is_exact
@@ -11981,8 +11983,9 @@ class Tile(object):
         """Return the key of a persistent-cache probe, or None to skip it.
 
         X-Plane reads a tile in many small requests. Once a probe found no
-        entry, probing again is pointless until this process records a write
-        for the tile, which changes the cache's write generation.
+        entry that can serve the tile, probing again is pointless until this
+        process records a write for the tile, which changes the cache's write
+        generation.
         """
         if dynamic_dds_cache is None or self._prepopulated:
             return None
@@ -12060,8 +12063,11 @@ class Tile(object):
                 dynamic_dds_cache.load(self.id, self.max_zoom, self)
                 if cache_has_requested_mipmap else None
             )
-            if meta is None and cached_bytes is None:
-                self._dds_cache_miss = cache_probe
+            # A partial or incomplete entry cannot serve this tile either, and
+            # re-reading it costs 30-500 ms per read (rows re-hashed and
+            # re-installed). Its partial rows are restored now; a later write
+            # for the tile changes the generation and triggers a new probe.
+            self._dds_cache_miss = cache_probe
             if cached_bytes is not None:
                 if self._populate_dds_from_prebuilt(
                     cached_bytes,
