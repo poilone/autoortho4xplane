@@ -29,6 +29,10 @@ _local_stats = {}
 _manager = None
 _store = None
 
+# "<prefix>:<pid>" -> time.time() when X-Plane first opened a DSF or texture
+# of that mount worker; the parent logs the load time from it.
+FIRST_SCENERY_OPEN_STAT = "first_scenery_open_ts"
+
 
 def _connect_manager_from_env():
     addr = os.getenv("AO_STATS_ADDR")
@@ -433,6 +437,7 @@ def filter_stats_snapshot(snap: dict) -> dict:
                 or k.startswith('partial_mm_count:')
                 or k.startswith('partial_mm_time_total_ms:')
                 or k.startswith('lock:')
+                or k.startswith(FIRST_SCENERY_OPEN_STAT)
             )
         ) or k in ('proc_count', 'cur_mem_mb_ts', 'simbrief_route_snapshot')
 

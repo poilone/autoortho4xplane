@@ -396,6 +396,45 @@ def diagnose(CFG, mount_timeout=60.0, retry_interval=0.25):
     return True
 
 
+class _LoadTimeLogger:
+    """Log once how long X-Plane took to load the flight.
+
+    From the first DSF or texture a mount worker served to the flight start:
+    X-Plane answers the dataref subscription only once the flight runs.
+    Log.txt ("Loading airplane number 0" to "Finished pre-warming paging
+    cache") remains the reference.
+    """
+
+    def __init__(self):
+        self._was_connected = None
+        self._done = False
+
+    def observe(self, connected, store):
+        if self._done:
+            return
+        was_connected, self._was_connected = self._was_connected, connected
+        if not connected or was_connected is not False:
+            return
+        prefix = aostats.FIRST_SCENERY_OPEN_STAT + ":"
+        firsts = []
+        for key in store.keys():
+            if isinstance(key, str) and key.startswith(prefix):
+                value = store.get(key, 0)
+                if isinstance(value, (int, float)) and value > 0:
+                    firsts.append(float(value))
+        if not firsts:
+            # No scenery served yet (X-Plane menu): wait for the flight load.
+            return
+        self._done = True
+        minutes, seconds = divmod(int(round(time.time() - min(firsts))), 60)
+        log.info(
+            "Flight started %d min %02d s after X-Plane opened its first "
+            "AutoOrtho scenery file",
+            minutes,
+            seconds,
+        )
+
+
 class AOMount:
     mounts_running = False
 
@@ -624,6 +663,7 @@ class AOMount:
 
         def _reporter_loop():
             last_log = time.monotonic()
+            load_time = _LoadTimeLogger()
             while not self._reporter_stop.wait(aggregation_interval_sec):
                 try:
                     # Update this process's own memory heartbeat so it's counted
@@ -712,6 +752,9 @@ class AOMount:
                         self._shared_store.set(
                             "flight_state", flight_state
                         )
+                        load_time.observe(
+                            flight_state["connected"], self._shared_store
+                        )
                     except Exception:
                         pass
 
@@ -762,7 +805,8 @@ class AOMount:
                                     k.startswith('mm_count:') or
                                     k.startswith('mm_time_total_ms:') or
                                     k.startswith('partial_mm_count:') or
-                                    k.startswith('partial_mm_time_total_ms:')
+                                    k.startswith('partial_mm_time_total_ms:') or
+                                    k.startswith(aostats.FIRST_SCENERY_OPEN_STAT)
                                 )) or k in (
                                     'proc_count',
                                     'cur_mem_mb_ts',

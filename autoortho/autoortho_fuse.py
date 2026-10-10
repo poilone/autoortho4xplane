@@ -49,6 +49,11 @@ try:
 except ImportError:
     from diagnostics import profile_span, record_stage
 
+try:
+    from autoortho.aostats import FIRST_SCENERY_OPEN_STAT
+except ImportError:
+    from aostats import FIRST_SCENERY_OPEN_STAT
+
 def _rgb_to_rgb565(r: int, g: int, b: int) -> int:
     """Convert RGB888 to RGB565 format used by BC1/DXT1 compression."""
     # RGB565: 5 bits red (high), 6 bits green (mid), 5 bits blue (low)
@@ -787,6 +792,7 @@ class AutoOrtho(Operations):
         )
         self._runtime_services_started = False
         self._runtime_services_lock = threading.Lock()
+        self._first_scenery_open_noted = False
         self._dsf_prefetch_scheduler = kwargs.get(
             "dsf_prefetch_scheduler"
         ) or DSFPrefetchScheduler(
@@ -847,6 +853,21 @@ class AutoOrtho(Operations):
             getortho.start_prefetcher(self.tc, self._scenery_name)
             getortho.start_predictive_dds(self.tc)
             self._runtime_services_started = True
+
+    def _note_first_scenery_open(self):
+        """Publish when X-Plane first opened a DSF or texture of this mount.
+
+        The parent logs the time from there to the flight start.
+        """
+        if self._first_scenery_open_noted:
+            return
+        self._first_scenery_open_noted = True
+        try:
+            getortho.set_stat(
+                f"{FIRST_SCENERY_OPEN_STAT}:{os.getpid()}", time.time()
+            )
+        except Exception:
+            log.debug("Could not publish first scenery open", exc_info=True)
 
     def _schedule_dsf_prefetch(self, path):
         if not self._dsf_prefetch_scheduler.schedule(path):
@@ -1391,6 +1412,7 @@ class AutoOrtho(Operations):
 
         # Handle DSF files with time exclusion redirect
         if self.dsf_re.match(path):
+            self._note_first_scenery_open()
             _pid = _get_fuse_pid_for_log()
             pid_text = f" by pid={_pid}" if _pid is not None else ""
             # Check if DSF should be redirected to global scenery
@@ -1419,6 +1441,7 @@ class AutoOrtho(Operations):
         
         dds_match = self.dds_re.match(path)
         if dds_match:
+            self._note_first_scenery_open()
             self._ensure_runtime_services()
             row, col, maptype, zoom = dds_match.groups()
             row = int(row)
